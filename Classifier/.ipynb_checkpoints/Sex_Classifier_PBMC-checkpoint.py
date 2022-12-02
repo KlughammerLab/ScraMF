@@ -16,7 +16,7 @@ import scrublet as scr
 
 package_dir = os.path.dirname(__file__)
 
-def sex_classifier(adata):
+def sex_classifier_pbmc(adata):
     start_time = time.time()
     print('Initializing')
     warnings.simplefilter("ignore", UserWarning)

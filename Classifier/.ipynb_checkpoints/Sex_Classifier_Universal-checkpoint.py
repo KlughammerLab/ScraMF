@@ -13,7 +13,7 @@ import os
 import MACA as maca
 import scrublet as scr
 
-def sex_classifier_universal(adata_training, adata_test):
+def model_classifer(adata_training):
     start_time = time.time()
     print('Initializing')
     warnings.simplefilter("ignore", UserWarning)
@@ -42,8 +42,18 @@ def sex_classifier_universal(adata_training, adata_test):
     model_softprob = xgb.train(param_softprob, train, epochs)
     
     print('Training Complete')
+    print("--- %s mins ---" % int((time.time() - start_time)/60))
+    return model_softmax, model_softprob
+    
+def sex_classifier_universal(adata_training, adata_test, model_softmax, model_softprob):
+    start_time = time.time()
+    print('Initializing')
+    warnings.simplefilter("ignore", UserWarning)
+    warnings.simplefilter("ignore", RuntimeWarning)
+    warnings.simplefilter("ignore", FutureWarning)
     
     #Slice genes in the test dataset and add genes from training dataset if they are unique to the training dataset. 
+    adata_training_copy = adata_training.copy()
     adata_test_copy = adata_test.copy()
     genes_training = [i for i in adata_test_copy.var.index if i in adata_training_copy.var.index]
     #Rearrange the test dataset to match the index of training.
@@ -65,6 +75,7 @@ def sex_classifier_universal(adata_training, adata_test):
     print('Test Adata Modified For The Model')
         
     #Make the test matrix
+    sex_classes = {'F':0, 'M':1}
     if ('Sex' or 'sex') in adata_test.obs_keys():
         adata_test_copy.obs['Sex_Class'] = adata_test.obs.Sex.map(sex_classes).astype('category')
         test = xgb.DMatrix(adata_test_copy.X, label=adata_test_copy.obs.Sex_Class)
@@ -109,4 +120,3 @@ def sex_classifier_universal(adata_training, adata_test):
         pass
     print('Prediction Completed')
     print("--- %s mins ---" % int((time.time() - start_time)/60))
-    return model_softmax, model_softprob
