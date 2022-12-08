@@ -12,6 +12,9 @@ from sklearn.metrics import accuracy_score
 import os
 import MACA as maca
 import scrublet as scr
+from matplotlib import rcParams
+import seaborn as sb
+import matplotlib.pyplot as plt
 
 
 package_dir = os.path.dirname(__file__)

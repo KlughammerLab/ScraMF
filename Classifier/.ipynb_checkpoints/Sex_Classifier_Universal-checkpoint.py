@@ -12,8 +12,12 @@ from sklearn.metrics import accuracy_score
 import os
 import MACA as maca
 import scrublet as scr
+import matplotlib.pyplot as plt
+from matplotlib import rcParams
+import seaborn as sb
 
-def model_classifer(adata_training):
+
+def model_classifer(adata_training, epochs=20, max_depth=10, eta=0.15):
     start_time = time.time()
     print('Initializing')
     warnings.simplefilter("ignore", UserWarning)
@@ -34,18 +38,26 @@ def model_classifer(adata_training):
     
     #Load Parameters:
     train = xgb.DMatrix(adata_training_copy.X, label=adata_training_copy.obs.Sex_Class)
-    param_softmax = {'max_depth':10, 'eta':0.15, 'objective':'multi:softmax','num_class':2}
-    param_softprob = {'max_depth':10, 'eta':0.15, 'objective':'multi:softprob','num_class':2}
-    epochs = 20
+    param_softmax = {'max_depth':max_depth, 'eta':eta, 'objective':'multi:softmax','num_class':2}
+    param_softprob = {'max_depth':max_depth, 'eta':eta, 'objective':'multi:softprob','num_class':2}
+    epochs = epochs
     #Train Models
     model_softmax = xgb.train(param_softmax, train, epochs)
     model_softprob = xgb.train(param_softprob, train, epochs)
     
+    #Make gene list
+    #Select ensemble IDs if they are present instead of gene names
+    global genes_adata_training_list
+     for i,j in zip(adata.var.iloc[0,:], range(0,(len(adata.var.iloc[0,:])))):
+    if 'ENS' in i:
+        genes_adata_training_list = (adata.var.iloc[:,j]).tolist()
+    else:
+        genes_adata_training_list = [i for i in adata.var.index]
     print('Training Complete')
     print("--- %s mins ---" % int((time.time() - start_time)/60))
     return model_softmax, model_softprob
     
-def sex_classifier_universal(adata_training, adata_test, model_softmax, model_softprob):
+def sex_classifier_universal(adata_test, model_softmax, model_softprob):
     start_time = time.time()
     print('Initializing')
     warnings.simplefilter("ignore", UserWarning)
@@ -53,24 +65,31 @@ def sex_classifier_universal(adata_training, adata_test, model_softmax, model_so
     warnings.simplefilter("ignore", FutureWarning)
     
     #Slice genes in the test dataset and add genes from training dataset if they are unique to the training dataset. 
-    adata_training_copy = adata_training.copy()
     adata_test_copy = adata_test.copy()
-    genes_training = [i for i in adata_test_copy.var.index if i in adata_training_copy.var.index]
+    genes_training = genes_adata_training_list
     #Rearrange the test dataset to match the index of training.
     adata_test_copy = adata_test_copy[:,genes_training].copy()
     
     print('Preparing Test Adata')
+    #Create Pseudo adata
+    var_pseudo = pd.DataFrame({'Gene_Names': genes_training})
+    var_pseudo = var_pseudo.set_index(['Gene_Names'])
+    obs_pseudo = pd.DataFrame({'Cols':[1]})
+    obs_pseudo = obs_pseudo.set_index('Cols')
+    matrix_pseudo = np.zeros((1,(len(genes_training))))
+    matrix_pseudo = sparse.csr_matrix(matrix_pseudo)
+    adata_psuedo_train = sc.AnnData(matrix_pseudo, obs_pseudo, var_pseudo)
     
     #Merge the datasets 
     adata_test_copy.obs['Set'] = 'Test'
-    adata_training_copy.obs['Set'] = 'Training'
-    adata_list = [adata_training_copy, adata_test_copy]
+    adata_pseudo_train.obs['Set'] = 'Training'
+    adata_list = [adata_pseudo_train, adata_test_copy]
     adata_merged = ad.concat(adata_list, join='outer')
     #Split the dataset
     adata_test_copy = adata_merged[adata_merged.obs.Set == 'Test']
     
     #Reindex test dataset
-    adata_test_copy.var = adata_test_copy.var.set_index(adata_training_copy.var.index)
+    adata_test_copy.var = adata_test_copy.var.set_index(adata_pseudo_train.var.index)
     
     print('Test Adata Modified For The Model')
         
