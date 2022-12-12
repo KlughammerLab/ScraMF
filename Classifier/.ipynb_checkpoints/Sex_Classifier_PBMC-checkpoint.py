@@ -8,7 +8,7 @@ from scipy import sparse
 from anndata import AnnData
 import time
 import xgboost as xgb
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, roc_auc_score, roc_curve
 import os
 import MACA as maca
 import scrublet as scr
@@ -78,9 +78,9 @@ def sex_classifier_pbmc(adata):
     print('Sex Prediction Complete')
     
     #Adding columns to the adata
-    adata.obs['Predictions'] =  predictions_softmax
+    adata.obs['Predictions_Class'] =  predictions_softmax
     sex_classes_2 = {0: 'F', 1: 'M'}
-    adata.obs['Predictions'] = adata.obs.Predictions.map(sex_classes_2).astype('category')
+    adata.obs['Predictions'] = adata.obs.Predictions_Class.map(sex_classes_2).astype('category')
     adata.obs['Predictions_Probability_Female'] = predictions_softprob.T[0]
     adata.obs['Predictions_Probability_Male'] = predictions_softprob.T[1]
     adata_test.obs['Predictions'] = predictions_softmax
@@ -106,14 +106,28 @@ def sex_classifier_pbmc(adata):
         print('The accuracy_score for females for universally trained model is {}'.format(acc_score_females))
     else:
         pass
-    print('Prediction Completed')
-    print("--- %s secs ---" % int((time.time() - start_time)))
     
+    print('Prediction Completed')
+    
+    #Add ROC Curve and ROC-AUC Value
+    auroc = roc_auc_score(adata_test.obs.Sex_Class, adata_test.obs.Predictions)
+    fpr, tpr, thresholds = roc_curve(adata_test.obs.Sex_Class, adata_test.obs.Predictions)
+    #Plot the ROC Curve
+    plt.figure(figsize=(5,5))
+    plt.plot(fpr, tpr, linestyle = '-', label = 'ROC_AUC_Curve %0.3f' % auroc)
+    plt.legend(loc='lower right')
+    plt.show()
+    
+    print("--- %s secs ---" % int((time.time() - start_time)))
+
 def misclassified(adata):
     print('Initializing') 
+    sc.settings.verbosity = 0
     start_time = time.time()    
     #Annotate all datasets individually and then concat because they have batch effect in between them
     adata_test = adata.copy()
+    #PCA analysis
+    sc.pp.pca(adata_test)
     #Normalize the data to 10000 reads per cell
     sc.pp.normalize_total(adata_test, target_sum=1e4)
     #Log tranform the data
@@ -135,18 +149,20 @@ def misclassified(adata):
     #Slice adata_test for i in marker_list_az if i in adata_test.var.index]
     b = [i for i in marker_list_az if i in adata_test.var.index]
     ad_az = adata_test.copy()
-    ad_az = ad_az[:,b].copy()
+    ad_az = ad_az[:,b]
     ad_az, annotation_az = maca.singleMACA(ad=ad_az, cell_markers=cell_markers_az,res=[1, 1.5, 2.0],n_neis=[3,5,10])
     print('Annotation Complete')
     
     #Add annotation to the original adata
+    adata.obs['Annotation']=np.array(annotation_az)
     adata_test.obs['Annotation']=np.array(annotation_az)
     adata_test.obs['n_counts'] = adata_test.X.sum(axis = 1)
     adata_test.obs['n_genes'] = (adata_test.X > 0).sum(axis = 1)
     mt_gene = np.flatnonzero([gene.startswith('MT-') for gene in adata_test.var_names])
     adata_test.obs['mt_frac']= np.sum(adata_test[:, mt_gene].X, axis =1).A1/adata_test.obs['n_counts']
     adata_test = adata_test[adata_test.obs['mt_frac'] < 0.2]
-    
+    adata_test.obs.Sex = adata_test.obs.Sex.astype(str)
+    adata_test.obs.Predictions = adata_test.obs.Predictions.astype(str)
     adata_wrong_predictions = adata_test[adata_test.obs.Sex != adata_test.obs.Predictions]
 
     # filtering/preprocessing parameters:
@@ -231,58 +247,31 @@ def misclassified(adata):
     mis_pred_df_temp = mis_pred_df.iloc[:-1,:]
 
     chosen_cell_type = mis_pred_df_temp.iloc[(np.argmax(mis_pred_df_temp['Perc_Unexplained_Total_Pop'])), :].Annotation
-    adata_test_chosen = adata_test[adata_test.obs.Annotation == chosen_cell_type].copy()
-    adata_test_chosen.obs['Group'] = np.where((adata_test_chosen.obs['Sex'] == adata_test_chosen.obs['Predictions']), 'Correct' , 'Incorrect')
-    females = adata_test_chosen[adata_test_chosen.obs.Sex == 'F'].copy()
-    males = adata_test_chosen[adata_test_chosen.obs.Sex == 'M'].copy()
+    females = adata_test[adata_test.obs.Sex == 'F'].copy()
+    females.obs['Group'] = np.where((adata_test.obs['Sex'] == adata_test.obs['Predictions']), 'Correct Females' , 'Incorrect Females')
+    males = adata_test[adata_test.obs.Sex == 'M'].copy()
+    males.obs['Group'] = np.where((adata_test.obs['Sex'] == adata_test.obs['Predictions']), 'Correct Males' , 'Incorrect Males')
     
     print('The most misclassified celltype is {}'.format(chosen_cell_type.upper()))
     print('Low quality cells detected and dataframe created')
+    
     #Differentially expressed genes for females and males
     sc.tl.rank_genes_groups(females, 'Group', method='t-test')
     sc.tl.rank_genes_groups(males, 'Group', method='t-test')
-
-    rcParams['figure.figsize']=(60,15)
-    
-    #Create female rank genes graph
-    females_genes = pd.DataFrame((females.uns['rank_genes_groups']['names'])).head(25)
-    females_scores = pd.DataFrame(females.uns['rank_genes_groups']['scores']).head(25)
-    females_scores.rename(columns={'Correct': 'Correct_Score', 'Incorrect': 'Incorrect_Score'}, inplace=True)
-    females_rank_genes = females_genes.join(females_scores)
-    females_rank_genes = females_rank_genes[['Correct','Correct_Score', 'Incorrect', 'Incorrect_Score']]
-    
-    #Create male rank genes graph
-    males_genes = pd.DataFrame((males.uns['rank_genes_groups']['names'])).head(25)
-    males_scores = pd.DataFrame(males.uns['rank_genes_groups']['scores']).head(25)
-    males_scores.rename(columns={'Correct': 'Correct_Score', 'Incorrect': 'Incorrect_Score'}, inplace=True)
-    males_rank_genes = males_genes.join(males_scores)
-    males_rank_genes = males_rank_genes[['Correct','Correct_Score', 'Incorrect', 'Incorrect_Score']]
     
     #Plot the figures
-    fig, ((ax1,ax2),(ax3,ax4)) = plt.subplots(nrows=2, ncols=2)
-    fig.subplots_adjust(hspace=0.4, wspace=0.6)
-    sb.set(font_scale=1)
-    sb.set_style(style='whitegrid')
-    sb.set_palette('Dark2')
-    p1 = sb.scatterplot(data=females_rank_genes.iloc[:,0:2], x=females_rank_genes.iloc[:,0:2].index,     y=females_rank_genes.iloc[:,0:2].Correct_Score, color='lightblue', 
-                        ax=ax1).set(title="Correct Females" )
-    p2 = sb.scatterplot(data=females_rank_genes.iloc[:,2:], x=females_rank_genes.iloc[:,2:].index, y=females_rank_genes.iloc[:,2:].Incorrect_Score, color='lightcoral', 
-                        ax=ax2).set(title="Incorrect Females" )
-    p3 = sb.scatterplot(data=males_rank_genes.iloc[:,0:2], x=males_rank_genes.iloc[:,0:2].index, y=males_rank_genes.iloc[:,0:2].Correct_Score, color='lightblue', 
-                        ax=ax3).set(title="Correct Males" )
-    p4 = sb.scatterplot(data=males_rank_genes.iloc[:,2:], x=males_rank_genes.iloc[:,2:].index, y=males_rank_genes.iloc[:,2:].Incorrect_Score, color='lightcoral', 
-                        ax=ax4).set(title="Incorrect Males",  )
-    for i in range(0,females_rank_genes.shape[0]):
-        ax1.text(females_rank_genes.iloc[:,0:2].index[i]+0.1, females_rank_genes.iloc[:,0:2].Correct_Score[i], females_rank_genes.iloc[:,0:2].Correct[i], 
-                 horizontalalignment='left', size='medium', color='midnightblue', weight='semibold')
-        ax2.text(females_rank_genes.iloc[:,2:].index[i]+0.1, females_rank_genes.iloc[:,2:].Incorrect_Score[i], females_rank_genes.iloc[:,2:].Incorrect[i], 
-                 horizontalalignment='left', size='medium', color='maroon', weight='semibold')
-        ax3.text(males_rank_genes.iloc[:,0:2].index[i]+0.1, males_rank_genes.iloc[:,0:2].Correct_Score[i], males_rank_genes.iloc[:,0:2].Correct[i], 
-                 horizontalalignment='left', size='medium', color='midnightblue', weight='semibold')
-        ax4.text(males_rank_genes.iloc[:,2:].index[i]+0.1, males_rank_genes.iloc[:,2:].Incorrect_Score[i], males_rank_genes.iloc[:,2:].Incorrect[i], 
-                 horizontalalignment='left', size='medium', color='maroon', weight='semibold')
-    plt.show()
-    plots = fig
+    #Calculate dendogram and generate matrixplot for the genes expressed by the correct and incorrect males and females
+    sc.tl.dendrogram(females, groupby='Annotation')
+    sc.tl.dendrogram(males, groupby='Annotation')
+    rcParams['figure.figsize']=(20,15)
+    plt.figure()
+    ax1 = plt.subplot(2,1,1)
+    sc.pl.rank_genes_groups_matrixplot(females, n_genes=20 , key='rank_genes_groups', 
+                               groupby='Annotation',cmap='BuPu', alpha=0.5, dendrogram=True, ax=ax1)
+    ax2 = plt.subplot(2,1,2)
+    sc.pl.rank_genes_groups_matrixplot(males, n_genes=20 , key='rank_genes_groups', 
+                               groupby='Annotation',cmap='GnBu', alpha=0.8, dendrogram=True, ax=ax2)
+    plots = ax1, ax2
     print('Dataframe and Plots Ready')
     print("--- %s mins ---" % int((time.time() - start_time)/60))
     return mis_pred_df, plots
