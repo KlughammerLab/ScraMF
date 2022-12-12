@@ -128,7 +128,6 @@ def sex_classifier_universal(adata_test, model_softmax, model_softprob):
         choices = [ "True Positive", 'False Positive', 'False Negative' , 'True Negative']
         adata_test.obs['Condition'] = np.select(conditions, choices, default=np.nan)
         #Accuracy Score
-        from sklearn.metrics import accuracy_score
         adata_test_copy_males = adata_test_copy[adata_test_copy.obs.Sex == 'M']
         acc_score_males = accuracy_score(adata_test_copy_males.obs.Sex_Class, adata_test_copy_males.obs.Predictions)
         print('The accuracy_score for males for universally trained model is {}'.format(acc_score_males))
