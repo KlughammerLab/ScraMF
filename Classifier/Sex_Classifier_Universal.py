@@ -67,7 +67,6 @@ def sex_classifier_universal(adata_test, model_softmax, model_softprob):
     
     #Slice genes in the test dataset and add genes from training dataset if they are unique to the training dataset. 
     adata_test_copy = adata_test.copy()
-    #genes_training = genes_adata_training_list
     genes_slice = [i for i in adata_test_copy.var.index if i in genes_training]
     #Rearrange the test dataset to match the index of training.
     adata_test_copy = adata_test_copy[:,genes_slice]
