@@ -3,6 +3,7 @@ import pickle
 import scanpy as sc
 import pandas as pd
 import numpy as np
+import anndata as ad
 from scipy import sparse
 import time
 import xgboost as xgb
@@ -148,138 +149,189 @@ def sex_classifier_universal(adata_test, model_softmax, model_softprob):
     print("--- %s mins ---" % int((time.time() - start_time)/60))
     
     
-def gene_expression(adata):
+def misclassified(adata, min_ncounts=1100, min_genes=300, min_mtfrac=0.04 ):
+    """Returns dataframe for misclassified cells"""
     print('Initializing')
     sc.settings.verbosity = 0
     start_time = time.time()    
     adata_test = adata.copy()
-    adata_test.obs.columns = adata_test.obs.columns.str.capitalize()
-    if ('Annotation') in adata_test.obs.keys():
-        #PCA Analysis
-        sc.pp.pca(adata_test)
-        #Normalize the data to 10000 reads per cell
-        sc.pp.normalize_total(adata_test, target_sum=1e4)
-        #Log tranform the data
-        sc.pp.log1p(adata_test)
+    if ('log1p') in adata.uns.keys():
+        adata_test.obs.columns = adata_test.obs.columns.str.capitalize()
+        if ('Annotation') in adata_test.obs.keys():
+            #Add parameters
+            adata_test.obs['n_counts'] = adata_test.X.sum(axis = 1)
+            adata_test.obs['n_genes'] = (adata_test.X > 0).sum(axis = 1)
+            mt_gene = np.flatnonzero([gene.startswith('MT-') for gene in adata_test.var_names])
+            adata_test.obs['mt_frac']= np.sum(adata_test[:, mt_gene].X, axis =1).A1/adata_test.obs['n_counts']
+            adata_test = adata_test[adata_test.obs['mt_frac'] < 0.2]
+            adata_test.obs.Sex = adata_test.obs.Sex.astype(str)
+            adata_test.obs.Predictions = adata_test.obs.Predictions.astype(str)
+            adata_wrong_predictions = adata_test[adata_test.obs.Sex != adata_test.obs.Predictions]
+
+            # filtering/preprocessing parameters:
+            min_counts = 2
+            min_cells = 3
+            vscore_percentile = 85
+            n_pc = 50
+            # doublet detector parameters:
+            expected_doublet_rate = 0.02 
+            sim_doublet_ratio = 3
+            n_neighbors = 15
+            scrub = scr.Scrublet(counts_matrix = adata_wrong_predictions.X,  
+                             n_neighbors = n_neighbors,
+                             sim_doublet_ratio = sim_doublet_ratio, expected_doublet_rate = expected_doublet_rate)
+
+            doublet_scores, predicted_doublets = scrub.scrub_doublets( 
+                            min_counts = min_counts, 
+                            min_cells = min_cells, 
+                            n_prin_comps = n_pc,
+                            use_approx_neighbors = True, 
+                            get_doublet_neighbor_parents = False, verbose=False)
+            adata_wrong_predictions.obs['doublet_score'] = doublet_scores
+            adata_wrong_predictions.obs['doublet'] = predicted_doublets
+
+            cells_annot = adata_test.obs.Annotation.unique().tolist()
+            mis_pred_cells = {}
+            total_cells = []
+            for i in cells_annot:
+                total = len(adata_test.obs[adata_test.obs.Annotation == i])
+                abc = adata_test.obs[adata_test.obs.Annotation == i]
+                total_cells.append(len(abc))
+                mispred = len(abc[abc.Sex != abc.Predictions])
+                perc = (mispred/total)*100
+                mis_pred_cells[i] = perc
+            mis_pred_df = pd.DataFrame.from_dict(mis_pred_cells, orient='index')
+            mis_pred_df = mis_pred_df.rename(columns={'index':'Cell_Type', 0:'Perc_Incorrectly_Classified'})
+            mis_pred_df['Number_Cells'] = total_cells
+
+            total_cells = sum(adata_test.obs.groupby('Annotation').size())
+            total_percentage = []
+            for i in mis_pred_df.Number_Cells:
+                total_percentage.append((i/total_cells)*100)
+            mis_pred_df['Perc_Total'] = total_percentage
+            mis_pred_df = mis_pred_df[['Number_Cells', 'Perc_Total', 'Perc_Incorrectly_Classified']]
+            num_mis = []
+            for i in cells_annot:
+                total = len(adata_test.obs[adata_test.obs.Annotation == i])
+                abc = adata_test.obs[adata_test.obs.Annotation == i]
+                mispred = len(abc[abc.Sex != abc.Predictions])
+                num_mis.append(mispred)
+            mis_pred_df['Number_Cells_Misclass'] = num_mis
+
+            #Some cells could have low gene count + count + doublet and therefore need to be filtered as low quality before individually assigning to columns
+            adata_low_quality = adata_wrong_predictions[(adata_wrong_predictions.obs.n_counts < min_ncounts) | (adata_wrong_predictions.obs.n_genes < min_genes) | 
+                                                    (adata_wrong_predictions.obs.doublet == True)]
+            low_qual = []
+            num_doublet = []
+            num_low_count_and_genes = []
+            num_mt_frac = []
+            for i in cells_annot:
+                total = len(adata_low_quality.obs[adata_low_quality.obs.Annotation == i])
+                low_qual.append(total)
+                n_doub = len(adata_low_quality[(adata_low_quality.obs.Annotation == i) & (adata_low_quality.obs.doublet == True)].obs)
+                num_doublet.append(n_doub)
+                low_count_genes = len(adata_low_quality[(adata_low_quality.obs.Annotation == i) & ((adata_low_quality.obs.n_counts< min_ncounts) | (adata_low_quality.obs.n_genes< min_genes))].obs)
+                num_low_count_and_genes.append(low_count_genes)
+                ncells_mt = len(adata_test[(adata_test.obs.Annotation == i) & (adata_test.obs.mt_frac > min_mtfrac)])
+                num_mt_frac.append(ncells_mt)
+            mis_pred_df['Num_Doublets'] = num_doublet    
+            mis_pred_df['NCells_High_MT_Frac'] = ncells_mt
+            mis_pred_df['NCells_Low_Count/Genes'] = num_low_count_and_genes
+            mis_pred_df['NCells_Explained_Misclass'] = mis_pred_df.Num_Doublets + mis_pred_df['NCells_Low_Count/Genes']
+            mis_pred_df['NCells_Unexplained_Misclass'] = mis_pred_df.Number_Cells_Misclass - mis_pred_df.NCells_Explained_Misclass
+            mis_pred_df['Perc_Unexplained'] = (mis_pred_df.NCells_Unexplained_Misclass/mis_pred_df.Number_Cells_Misclass)*100
+            total_unexplained = mis_pred_df.NCells_Unexplained_Misclass.sum()
+            mis_pred_df['Perc_Unexplained_Total_Pop'] = (mis_pred_df.NCells_Unexplained_Misclass/total_unexplained)*100
+            mis_pred_df = mis_pred_df.reset_index()
+            mis_pred_df = mis_pred_df.rename(columns={'index':'Annotation'})
+            mis_pred_df.loc['Total',:]= mis_pred_df.sum(axis=0)   
+            mis_pred_df_temp = mis_pred_df.iloc[:-1,:]
+            mis_pred_df.iloc[-1,0] = 'Total'
+            chosen_cell_type = mis_pred_df_temp.iloc[(np.argmax(mis_pred_df_temp['Perc_Unexplained_Total_Pop'])), :].Annotation
+
+            print('The most misclassified celltype is {}'.format(chosen_cell_type.upper()))
+            print('Low quality cells detected and dataframe created')
+            return mis_pred_df
+        else:
+            print('Please provide Adata with Annotation')
+            return None
+
+    else:
+        print('Please provide Normalized and Log transformed Adata')
     
-        #Add parameters
-        adata_test.obs['n_counts'] = adata_test.X.sum(axis = 1)
-        adata_test.obs['n_genes'] = (adata_test.X > 0).sum(axis = 1)
-        mt_gene = np.flatnonzero([gene.startswith('MT-') for gene in adata_test.var_names])
-        adata_test.obs['mt_frac']= np.sum(adata_test[:, mt_gene].X, axis =1).A1/adata_test.obs['n_counts']
-        adata_test = adata_test[adata_test.obs['mt_frac'] < 0.2]
+
+
+def plot_avg_gene_expression(adata):
+    """Returns average gene expression of differentially expressed genes for correctly and incorrectly classified cells"""
+    if ('log1p') in adata.uns.keys():
+        adata_test = adata.copy()
+        start_time = time.time()
+        print('Computing')
+        #Change Sex and Prediction to Strings
         adata_test.obs.Sex = adata_test.obs.Sex.astype(str)
         adata_test.obs.Predictions = adata_test.obs.Predictions.astype(str)
-        adata_wrong_predictions = adata_test[adata_test.obs.Sex != adata_test.obs.Predictions]
-
-        # filtering/preprocessing parameters:
-        min_counts = 2
-        min_cells = 3
-        vscore_percentile = 85
-        n_pc = 50
-        # doublet detector parameters:
-        expected_doublet_rate = 0.02 
-        sim_doublet_ratio = 3
-        n_neighbors = 15
-        scrub = scr.Scrublet(counts_matrix = adata_wrong_predictions.X,  
-                         n_neighbors = n_neighbors,
-                         sim_doublet_ratio = sim_doublet_ratio, expected_doublet_rate = expected_doublet_rate)
-        
-        doublet_scores, predicted_doublets = scrub.scrub_doublets( 
-                        min_counts = min_counts, 
-                        min_cells = min_cells, 
-                        n_prin_comps = n_pc,
-                        use_approx_neighbors = True, 
-                        get_doublet_neighbor_parents = False, verbose=False)
-        adata_wrong_predictions.obs['doublet_score'] = doublet_scores
-        adata_wrong_predictions.obs['doublet'] = predicted_doublets
-
-        cells_annot = adata_test.obs.Annotation.unique().tolist()
-        mis_pred_cells = {}
-        total_cells = []
-        for i in cells_annot:
-            total = len(adata_test.obs[adata_test.obs.Annotation == i])
-            abc = adata_test.obs[adata_test.obs.Annotation == i]
-            total_cells.append(len(abc))
-            mispred = len(abc[abc.Sex != abc.Predictions])
-            perc = (mispred/total)*100
-            mis_pred_cells[i] = perc
-        mis_pred_df = pd.DataFrame.from_dict(mis_pred_cells, orient='index')
-        mis_pred_df = mis_pred_df.rename(columns={'index':'Cell_Type', 0:'Perc_Incorrectly_Classified'})
-        mis_pred_df['Number_Cells'] = total_cells
-
-        total_cells = sum(adata_test.obs.groupby('Annotation').size())
-        total_percentage = []
-        for i in mis_pred_df.Number_Cells:
-            total_percentage.append((i/total_cells)*100)
-        mis_pred_df['Perc_Total'] = total_percentage
-        mis_pred_df = mis_pred_df[['Number_Cells', 'Perc_Total', 'Perc_Incorrectly_Classified']]
-        num_mis = []
-        for i in cells_annot:
-            total = len(adata_test.obs[adata_test.obs.Annotation == i])
-            abc = adata_test.obs[adata_test.obs.Annotation == i]
-            mispred = len(abc[abc.Sex != abc.Predictions])
-            num_mis.append(mispred)
-        mis_pred_df['Number_Cells_Misclass'] = num_mis
-
-        #Some cells could have low gene count + count + doublet and therefore need to be filtered as low quality before individually assigning to columns
-        adata_low_quality = adata_wrong_predictions[(adata_wrong_predictions.obs.n_counts < 1100) | (adata_wrong_predictions.obs.n_genes < 300) | 
-                                                (adata_wrong_predictions.obs.doublet == True)]
-        low_qual = []
-        num_doublet = []
-        num_low_count_and_genes = []
-        num_mt_frac = []
-        for i in cells_annot:
-            total = len(adata_low_quality.obs[adata_low_quality.obs.Annotation == i])
-            low_qual.append(total)
-            n_doub = len(adata_low_quality[(adata_low_quality.obs.Annotation == i) & (adata_low_quality.obs.doublet == True)].obs)
-            num_doublet.append(n_doub)
-            low_count_genes = len(adata_low_quality[(adata_low_quality.obs.Annotation == i) & ((adata_low_quality.obs.n_counts< 1100) | (adata_low_quality.obs.n_genes< 300))].obs)
-            num_low_count_and_genes.append(low_count_genes)
-            ncells_mt = len(adata_test[(adata_test.obs.Annotation == i) & (adata_test.obs.mt_frac > 0.04)])
-            num_mt_frac.append(ncells_mt)
-        mis_pred_df['Num_Doublets'] = num_doublet    
-        mis_pred_df['NCells_High_MT_Frac'] = ncells_mt
-        mis_pred_df['NCells_Low_Count/Genes'] = num_low_count_and_genes
-        mis_pred_df['NCells_Explained_Misclass'] = mis_pred_df.Num_Doublets + mis_pred_df['NCells_Low_Count/Genes']
-        mis_pred_df['NCells_Unexplained_Misclass'] = mis_pred_df.Number_Cells_Misclass - mis_pred_df.NCells_Explained_Misclass
-        mis_pred_df['Perc_Unexplained'] = (mis_pred_df.NCells_Unexplained_Misclass/mis_pred_df.Number_Cells_Misclass)*100
-        total_unexplained = mis_pred_df.NCells_Unexplained_Misclass.sum()
-        mis_pred_df['Perc_Unexplained_Total_Pop'] = (mis_pred_df.NCells_Unexplained_Misclass/total_unexplained)*100
-        mis_pred_df = mis_pred_df.reset_index()
-        mis_pred_df = mis_pred_df.rename(columns={'index':'Annotation'})
-        mis_pred_df.loc['Total',:]= mis_pred_df.sum(axis=0)   
-        mis_pred_df_temp = mis_pred_df.iloc[:-1,:]
-        mis_pred_df.iloc[-1,0] = 'Total'
-        chosen_cell_type = mis_pred_df_temp.iloc[(np.argmax(mis_pred_df_temp['Perc_Unexplained_Total_Pop'])), :].Annotation
+        #Split the data into males and females
         females = adata_test[adata_test.obs.Sex == 'F']
-        females.obs['Group'] = np.where((females.obs['Sex'] == females.obs['Predictions']), 'Correct Females' , 'Incorrect Females')
         males = adata_test[adata_test.obs.Sex == 'M']
+        #Make the Group Column for calculating DE genes
+        females.obs['Group'] = np.where((females.obs['Sex'] == females.obs['Predictions']), 'Correct Females' , 'Incorrect Females')
         males.obs['Group'] = np.where((males.obs['Sex'] == males.obs['Predictions']), 'Correct Males' , 'Incorrect Males')
-        
-        print('The most misclassified celltype is {}'.format(chosen_cell_type.upper()))
-        print('Low quality cells detected and dataframe created')
-        
-        #Differentially expressed genes for females and males
+        #Calculate DE genes
         sc.tl.rank_genes_groups(females, 'Group', method='t-test')
         sc.tl.rank_genes_groups(males, 'Group', method='t-test')
-        
-        #Calculate dendogram and generate matrixplot for the genes expressed by the correct and incorrect males and females
-        sc.tl.dendrogram(females, groupby='Annotation')
-        sc.tl.dendrogram(males, groupby='Annotation')
+        print('Genes Identified')
+        #Create list of those genes
+        females_names = pd.DataFrame((females.uns['rank_genes_groups']['names'])).head(20)
+        males_names = pd.DataFrame((males.uns['rank_genes_groups']['names'])).head(20)
+        fem_correct = females_names.iloc[:,0].tolist()
+        fem_incorrect = females_names.iloc[:,1].tolist()
+        male_correct = males_names.iloc[:,0].tolist()
+        male_incorrect = males_names.iloc[:,1].tolist()
+        #Create required lists for FOR loop
+        list_all = [fem_correct, fem_incorrect, male_correct, male_incorrect]
+        names = ['females_correct', 'females_incorrect', 'males_correct', 'males_incorrect']
+        adata_list=[females, females, males, males]
+        df_names_list = ['df_females_correct', 'df_females_incorrect', 'df_males_correct', 'df_males_incorrect']
+        #Create the inital DF
+        for ls,name,ad in zip(list_all, names, adata_list):
+            temp_adata = ad[:,(ls[0])]
+            temp_adata.obs[ls[0]] = temp_adata.X.sum(axis = 1)
+            globals()['df' + '_' + name] = pd.DataFrame(temp_adata.obs.groupby('Annotation')[ls[0]].mean())
+        #Create list of DFs
+        df_list = []
+        for i in names:
+            df_list.append(globals()['df' + '_' + i])
+        #Create final DF for CM, CF, IM, IF
+        for genes_list, df, adata in zip(list_all, df_list, adata_list):
+            for genes in genes_list[1:]:
+                temp_adata = adata[:,genes]
+                temp_adata.obs[genes] = temp_adata.X.sum(axis = 1)
+                df[genes] = dict(temp_adata.obs.groupby('Annotation')[genes].mean())
+            df.index.name = None
+        print('Dataframes created')
+        print('Plotting')
+        #Plots
+        fig, ((ax1,ax2),(ax3,ax4)) = plt.subplots(nrows=2, ncols=2)
         rcParams['figure.figsize']=(20,15)
-        plt.figure()
-        ax1 = plt.subplot(2,1,1)
-        sc.pl.rank_genes_groups_matrixplot(females, n_genes=20 , key='rank_genes_groups', 
-                                   groupby='Annotation',cmap='BuPu', alpha=0.5, dendrogram=True, ax=ax1)
-        ax2 = plt.subplot(2,1,2)
-        sc.pl.rank_genes_groups_matrixplot(males, n_genes=20 , key='rank_genes_groups', 
-                                   groupby='Annotation',cmap='GnBu', alpha=0.8, dendrogram=True, ax=ax2)
-        plots = ax1, ax2
-        return mis_pred_df, plots
+        fig.subplots_adjust(hspace=0.5, wspace=0.001)
+        sb.heatmap(df_females_correct, ax=ax1, cmap='GnBu', alpha=0.6, cbar=False).set(title="Correct Females" )
+        fig.colorbar(ax1.collections[0], ax=ax1,location="left", use_gridspec=False, pad=0.4, shrink=0.5)
+        sb.heatmap(df_females_incorrect, ax=ax2, cmap='OrRd', alpha=0.6,cbar=False).set(title="Incorrect Females")
+        fig.colorbar(ax2.collections[0], ax=ax2,location="right", use_gridspec=False, pad=0.4, shrink=0.5)
+        sb.heatmap(df_males_correct, ax=ax3, cmap='GnBu', alpha=0.6, cbar=False).set(title="Correct Males" )
+        fig.colorbar(ax3.collections[0], ax=ax3,location="left", use_gridspec=False, pad=0.4, shrink=0.5)
+        sb.heatmap(df_males_incorrect, ax=ax4, cmap='OrRd', alpha=0.6,cbar=False).set(title="Incorrect Males")
+        fig.colorbar(ax4.collections[0], ax=ax4,location="right", use_gridspec=False, pad=0.4, shrink=0.5)
+        ax2.yaxis.tick_right()
+        ax4.yaxis.tick_right()
+        ax2.yaxis.set_tick_params(rotation=0)
+        ax4.yaxis.set_tick_params(rotation=0)
+        plt.show()
+        print("--- %s sec ---" % int((time.time() - start_time)))
+        return fig
     else:
-        print('Please provide Adata with Annotation')
-        return None, None
+        print('Please provide Normalized and Log transformed Adata')
+        return None
     
     
         

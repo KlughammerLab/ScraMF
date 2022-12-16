@@ -3,6 +3,7 @@ import pickle
 import scanpy as sc
 import pandas as pd
 import numpy as np
+import anndata as ad
 from scipy import sparse
 import time
 import xgboost as xgb
@@ -118,21 +119,23 @@ def sex_classifier_pbmc(adata):
     
     print("--- %s secs ---" % int((time.time() - start_time)))
 
-def misclassified(adata):
-    print('Initializing') 
-    sc.settings.verbosity = 0
+def misclassified(adata, min_ncounts=1100, min_genes=300, min_mtfrac=0.04):
+    print('Initializing')
     start_time = time.time()    
-    #Annotate all datasets individually and then concat because they have batch effect in between them
+    sc.settings.verbosity = 0
     adata_test = adata.copy()
-    #PCA analysis
-    sc.pp.pca(adata_test)
-    #Normalize the data to 10000 reads per cell
-    sc.pp.normalize_total(adata_test, target_sum=1e4)
-    #Log tranform the data
-    sc.pp.log1p(adata_test)
+    if ('log1p') not in adata.uns.keys():
+        #PCA analysis
+        sc.pp.pca(adata_test)
+        #Normalize the data to 10000 reads per cell
+        sc.pp.normalize_total(adata_test, target_sum=1e4)
+        #Log tranform the data
+        sc.pp.log1p(adata_test)
+    else:
+        pass
     
     #Check which cell type is misclassified
-    azimuth_markers = pd.read_csv('/home/sparikh/Classifier_data/azimuth_markers_MACA.csv', index_col=['Unnamed: 0'])
+    azimuth_markers = pd.read_csv((os.path.join(package_dir, 'azimuth_markers_MACA.csv')), index_col=['Unnamed: 0'])
     cells_of_interest_az = azimuth_markers['Expanded Label'].values.tolist()
     
     #Create the lists and dicts
@@ -216,7 +219,7 @@ def misclassified(adata):
     mis_pred_df['Number_Cells_Misclass'] = num_mis
 
     #Some cells could have low gene count + count + doublet and therefore need to be filtered as low quality before individually assigning to columns
-    adata_low_quality = adata_wrong_predictions[(adata_wrong_predictions.obs.n_counts < 1100) | (adata_wrong_predictions.obs.n_genes < 300) | 
+    adata_low_quality = adata_wrong_predictions[(adata_wrong_predictions.obs.n_counts < min_ncounts) | (adata_wrong_predictions.obs.n_genes < min_genes) | 
                                             (adata_wrong_predictions.obs.doublet == True)]
     low_qual = []
     num_doublet = []
@@ -227,9 +230,9 @@ def misclassified(adata):
         low_qual.append(total)
         n_doub = len(adata_low_quality[(adata_low_quality.obs.Annotation == i) & (adata_low_quality.obs.doublet == True)].obs)
         num_doublet.append(n_doub)
-        low_count_genes = len(adata_low_quality[(adata_low_quality.obs.Annotation == i) & ((adata_low_quality.obs.n_counts< 1100) | (adata_low_quality.obs.n_genes< 300))].obs)
+        low_count_genes = len(adata_low_quality[(adata_low_quality.obs.Annotation == i) & ((adata_low_quality.obs.n_counts< min_ncounts) | (adata_low_quality.obs.n_genes< min_genes))].obs)
         num_low_count_and_genes.append(low_count_genes)
-        ncells_mt = len(adata_test[(adata_test.obs.Annotation == i) & (adata_test.obs.mt_frac > 0.04)])
+        ncells_mt = len(adata_test[(adata_test.obs.Annotation == i) & (adata_test.obs.mt_frac > min_mtfrac)])
         num_mt_frac.append(ncells_mt)
     mis_pred_df['Num_Doublets'] = num_doublet    
     mis_pred_df['NCells_High_MT_Frac'] = ncells_mt
@@ -245,32 +248,82 @@ def misclassified(adata):
     mis_pred_df_temp = mis_pred_df.iloc[:-1,:]
 
     chosen_cell_type = mis_pred_df_temp.iloc[(np.argmax(mis_pred_df_temp['Perc_Unexplained_Total_Pop'])), :].Annotation
-    females = adata_test[adata_test.obs.Sex == 'F'].copy()
-    females.obs['Group'] = np.where((adata_test.obs['Sex'] == adata_test.obs['Predictions']), 'Correct Females' , 'Incorrect Females')
-    males = adata_test[adata_test.obs.Sex == 'M'].copy()
-    males.obs['Group'] = np.where((adata_test.obs['Sex'] == adata_test.obs['Predictions']), 'Correct Males' , 'Incorrect Males')
-    
-    print('The most misclassified celltype is {}'.format(chosen_cell_type.upper()))
     print('Low quality cells detected and dataframe created')
-    
-    #Differentially expressed genes for females and males
-    sc.tl.rank_genes_groups(females, 'Group', method='t-test')
-    sc.tl.rank_genes_groups(males, 'Group', method='t-test')
-    
-    #Plot the figures
-    #Calculate dendogram and generate matrixplot for the genes expressed by the correct and incorrect males and females
-    sc.tl.dendrogram(females, groupby='Annotation')
-    sc.tl.dendrogram(males, groupby='Annotation')
-    rcParams['figure.figsize']=(20,15)
-    plt.figure()
-    ax1 = plt.subplot(2,1,1)
-    sc.pl.rank_genes_groups_matrixplot(females, n_genes=20 , key='rank_genes_groups', 
-                               groupby='Annotation',cmap='BuPu', alpha=0.5, dendrogram=True, ax=ax1)
-    ax2 = plt.subplot(2,1,2)
-    sc.pl.rank_genes_groups_matrixplot(males, n_genes=20 , key='rank_genes_groups', 
-                               groupby='Annotation',cmap='GnBu', alpha=0.8, dendrogram=True, ax=ax2)
-    plots = ax1, ax2
-    print('Dataframe and Plots Ready')
     print("--- %s mins ---" % int((time.time() - start_time)/60))
-    return mis_pred_df, plots
+    return mis_pred_df
+
+
+def plot_avg_gene_expression(adata):
+    """Returns average gene expression of differentially expressed genes for correctly and incorrectly classified cells"""
+    if ('log1p') in adata.uns.keys():
+        adata_test = adata.copy()
+        start_time = time.time()
+        print('Computing')
+        #Change Sex and Prediction to Strings
+        adata_test.obs.Sex = adata_test.obs.Sex.astype(str)
+        adata_test.obs.Predictions = adata_test.obs.Predictions.astype(str)
+        #Split the data into males and females
+        females = adata_test[adata_test.obs.Sex == 'F']
+        males = adata_test[adata_test.obs.Sex == 'M']
+        #Make the Group Column for calculating DE genes
+        females.obs['Group'] = np.where((females.obs['Sex'] == females.obs['Predictions']), 'Correct Females' , 'Incorrect Females')
+        males.obs['Group'] = np.where((males.obs['Sex'] == males.obs['Predictions']), 'Correct Males' , 'Incorrect Males')
+        #Calculate DE genes
+        sc.tl.rank_genes_groups(females, 'Group', method='t-test')
+        sc.tl.rank_genes_groups(males, 'Group', method='t-test')
+        print('Genes Identified')
+        #Create list of those genes
+        females_names = pd.DataFrame((females.uns['rank_genes_groups']['names'])).head(20)
+        males_names = pd.DataFrame((males.uns['rank_genes_groups']['names'])).head(20)
+        fem_correct = females_names.iloc[:,0].tolist()
+        fem_incorrect = females_names.iloc[:,1].tolist()
+        male_correct = males_names.iloc[:,0].tolist()
+        male_incorrect = males_names.iloc[:,1].tolist()
+        #Create required lists for FOR loop
+        list_all = [fem_correct, fem_incorrect, male_correct, male_incorrect]
+        names = ['females_correct', 'females_incorrect', 'males_correct', 'males_incorrect']
+        adata_list=[females, females, males, males]
+        df_names_list = ['df_females_correct', 'df_females_incorrect', 'df_males_correct', 'df_males_incorrect']
+        #Create the inital DF
+        for ls,name,ad in zip(list_all, names, adata_list):
+            temp_adata = ad[:,(ls[0])]
+            temp_adata.obs[ls[0]] = temp_adata.X.sum(axis = 1)
+            globals()['df' + '_' + name] = pd.DataFrame(temp_adata.obs.groupby('Annotation')[ls[0]].mean())
+        #Create list of DFs
+        df_list = []
+        for i in names:
+            df_list.append(globals()['df' + '_' + i])
+        #Create final DF for CM, CF, IM, IF
+        for genes_list, df, adata in zip(list_all, df_list, adata_list):
+            for genes in genes_list[1:]:
+                temp_adata = adata[:,genes]
+                temp_adata.obs[genes] = temp_adata.X.sum(axis = 1)
+                df[genes] = dict(temp_adata.obs.groupby('Annotation')[genes].mean())
+            df.index.name = None
+        print('Dataframes created')
+        print('Plotting')
+        #Plots
+        fig, ((ax1,ax2),(ax3,ax4)) = plt.subplots(nrows=2, ncols=2)
+        rcParams['figure.figsize']=(20,15)
+        fig.subplots_adjust(hspace=0.5, wspace=0.001)
+        sb.heatmap(df_females_correct, ax=ax1, cmap='GnBu', alpha=0.6, cbar=False).set(title="Correct Females" )
+        fig.colorbar(ax1.collections[0], ax=ax1,location="left", use_gridspec=False, pad=0.4, shrink=0.5)
+        sb.heatmap(df_females_incorrect, ax=ax2, cmap='OrRd', alpha=0.6,cbar=False).set(title="Incorrect Females")
+        fig.colorbar(ax2.collections[0], ax=ax2,location="right", use_gridspec=False, pad=0.4, shrink=0.5)
+        sb.heatmap(df_males_correct, ax=ax3, cmap='GnBu', alpha=0.6, cbar=False).set(title="Correct Males" )
+        fig.colorbar(ax3.collections[0], ax=ax3,location="left", use_gridspec=False, pad=0.4, shrink=0.5)
+        sb.heatmap(df_males_incorrect, ax=ax4, cmap='OrRd', alpha=0.6,cbar=False).set(title="Incorrect Males")
+        fig.colorbar(ax4.collections[0], ax=ax4,location="right", use_gridspec=False, pad=0.4, shrink=0.5)
+        ax2.yaxis.tick_right()
+        ax4.yaxis.tick_right()
+        ax2.yaxis.set_tick_params(rotation=0)
+        ax4.yaxis.set_tick_params(rotation=0)
+        plt.show()
+        print("--- %s sec ---" % int((time.time() - start_time)))
+        return fig
+    else:
+        print('Please provide Normalized and Log transformed Adata')
+        return None
+    
+    
 
