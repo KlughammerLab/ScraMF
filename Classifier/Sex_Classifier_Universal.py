@@ -18,13 +18,14 @@ import matplotlib.pyplot as plt
 
 
 def model_classifer(adata_training, epochs=20, max_depth=10, eta=0.15):
+    """ Train models for classifying cells into males and females through sex_classifier_universal function"""
     start_time = time.time()
     print('Initializing')
     warnings.simplefilter("ignore", UserWarning)
     warnings.simplefilter("ignore", RuntimeWarning)
     warnings.simplefilter("ignore", FutureWarning)
     
-    print('Preparing Training Adata')
+    print('Preparing Training Anndata')
     #Add Sex_Class to training adata if it does not exist
     adata_training_copy = adata_training.copy()
     adata_training_copy.obs.columns = adata_training_copy.obs.columns.str.capitalize()
@@ -32,7 +33,7 @@ def model_classifer(adata_training, epochs=20, max_depth=10, eta=0.15):
     if 'Sex' in adata_training_copy.obs_keys():
         adata_training_copy.obs['Sex_Class'] = adata_training_copy.obs.Sex.map(sex_classes).astype('category')
     else:
-        print('Please provide training adata with SEX column')
+        print('Please provide training Anndata with SEX column')
     
     print('Training Models')
     
@@ -54,11 +55,12 @@ def model_classifer(adata_training, epochs=20, max_depth=10, eta=0.15):
             break
         else:
             genes_training = adata_training_copy.var.index.tolist()
-    print('Training Complete')
+    print('Training Complete')        
     print("--- %s mins ---" % int((time.time() - start_time)/60))
     return model_softmax, model_softprob
     
-def sex_classifier_universal(adata_test, model_softmax, model_softprob):
+def sex_classifier_universal(adata_test, model_softmax, model_softprob, cutoff=0.85):
+    """ Classifies cells into males and females based on the gene expression"""
     start_time = time.time()
     print('Initializing')
     warnings.simplefilter("ignore", UserWarning)
@@ -90,7 +92,7 @@ def sex_classifier_universal(adata_test, model_softmax, model_softprob):
     #Reindex test dataset
     adata_test_copy.var = adata_test_copy.var.set_index(adata_pseudo_train.var.index)
     
-    print('Test Adata Modified For The Model')
+    print('Test Anndata Modified For The Model')
         
     #Make the test matrix
     sex_classes = {'F':0, 'M':1}
@@ -116,14 +118,14 @@ def sex_classifier_universal(adata_test, model_softmax, model_softprob):
     adata_test_copy.obs['Class_Prediction'] = np.where((adata_test_copy.obs['Predictions'] == 0.0), 
                                                   adata_test.obs.Predictions_Probability_Female, 
                                                   adata_test.obs.Predictions_Probability_Male)
-    print('Adding Columns to the Test Adata')
+    print('Adding Columns to the Test Anndata')
     
     #If loop for adding the class prediction of the provided sex data 
     if ('Sex' or 'sex' or 'SEX') in adata_test.obs_keys():
-        conditions = [((adata_test_copy.obs.Sex_Class == adata_test_copy.obs.Predictions) & (adata_test_copy.obs.Class_Prediction > 0.85)),
-          ((adata_test_copy.obs.Sex_Class != adata_test_copy.obs.Predictions) & (adata_test_copy.obs.Class_Prediction > 0.85)), 
-          ((adata_test_copy.obs.Sex_Class == adata_test_copy.obs.Predictions) & (adata_test_copy.obs.Class_Prediction < 0.85)),
-          ((adata_test_copy.obs.Sex_Class != adata_test_copy.obs.Predictions) & (adata_test_copy.obs.Class_Prediction < 0.85))]
+        conditions = [((adata_test_copy.obs.Sex_Class == adata_test_copy.obs.Predictions) & (adata_test_copy.obs.Class_Prediction > cutoff)),
+          ((adata_test_copy.obs.Sex_Class != adata_test_copy.obs.Predictions) & (adata_test_copy.obs.Class_Prediction > cutoff)), 
+          ((adata_test_copy.obs.Sex_Class == adata_test_copy.obs.Predictions) & (adata_test_copy.obs.Class_Prediction < cutoff)),
+          ((adata_test_copy.obs.Sex_Class != adata_test_copy.obs.Predictions) & (adata_test_copy.obs.Class_Prediction < cutoff))]
         choices = [ "True Positive", 'False Positive', 'False Negative' , 'True Negative']
         adata_test.obs['Condition'] = np.select(conditions, choices, default=np.nan)
         #Accuracy Score
@@ -256,7 +258,7 @@ def misclassified(adata, min_ncounts=1100, min_genes=300, min_mtfrac=0.04 ):
             return None
 
     else:
-        print('Please provide Normalized and Log transformed Adata')
+        print('Please provide Normalized and Log transformed Anndata')
     
 
 
@@ -310,17 +312,16 @@ def plot_avg_gene_expression(adata):
         print('Dataframes created')
         print('Plotting')
         #Plots
-        fig, ((ax1,ax2),(ax3,ax4)) = plt.subplots(nrows=2, ncols=2)
-        rcParams['figure.figsize']=(20,15)
+        fig, ((ax1,ax2),(ax3,ax4)) = plt.subplots(nrows=2, ncols=2,  figsize=(20,10))
         fig.subplots_adjust(hspace=0.5, wspace=0.001)
         sb.heatmap(df_females_correct, ax=ax1, cmap='GnBu', alpha=0.6, cbar=False).set(title="Correct Females" )
-        fig.colorbar(ax1.collections[0], ax=ax1,location="left", use_gridspec=False, pad=0.4, shrink=0.5)
+        fig.colorbar(ax1.collections[0], ax=ax1,location="left", use_gridspec=False, pad=0.5, shrink=0.5)
         sb.heatmap(df_females_incorrect, ax=ax2, cmap='OrRd', alpha=0.6,cbar=False).set(title="Incorrect Females")
-        fig.colorbar(ax2.collections[0], ax=ax2,location="right", use_gridspec=False, pad=0.4, shrink=0.5)
+        fig.colorbar(ax2.collections[0], ax=ax2,location="right", use_gridspec=False, pad=0.5, shrink=0.5)
         sb.heatmap(df_males_correct, ax=ax3, cmap='GnBu', alpha=0.6, cbar=False).set(title="Correct Males" )
-        fig.colorbar(ax3.collections[0], ax=ax3,location="left", use_gridspec=False, pad=0.4, shrink=0.5)
+        fig.colorbar(ax3.collections[0], ax=ax3,location="left", use_gridspec=False, pad=0.5, shrink=0.5)
         sb.heatmap(df_males_incorrect, ax=ax4, cmap='OrRd', alpha=0.6,cbar=False).set(title="Incorrect Males")
-        fig.colorbar(ax4.collections[0], ax=ax4,location="right", use_gridspec=False, pad=0.4, shrink=0.5)
+        fig.colorbar(ax4.collections[0], ax=ax4,location="right", use_gridspec=False, pad=0.5, shrink=0.5)
         ax2.yaxis.tick_right()
         ax4.yaxis.tick_right()
         ax2.yaxis.set_tick_params(rotation=0)
@@ -329,7 +330,7 @@ def plot_avg_gene_expression(adata):
         print("--- %s sec ---" % int((time.time() - start_time)))
         return fig
     else:
-        print('Please provide Normalized and Log transformed Adata')
+        print('Please provide Normalized and Log transformed Anndata')
         return None
     
     

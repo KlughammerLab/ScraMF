@@ -18,7 +18,8 @@ import matplotlib.pyplot as plt
 
 package_dir = os.path.dirname(__file__)
 
-def sex_classifier_pbmc(adata):
+def sex_classifier_pbmc(adata, cutoff=0.85):
+    """ Classifies cells into males and females based on the gene expression"""
     start_time = time.time()
     print('Initializing')
     warnings.simplefilter("ignore", UserWarning)
@@ -62,7 +63,7 @@ def sex_classifier_pbmc(adata):
     #Reindex test dataset
     adata_test.var = adata_test.var.set_index(adata_training.var.index)
     
-    print('Adata Modified For The Model')
+    print('Anndata Modified For The Model')
         
     #Make the test matrix
     if ('Sex' or 'sex') in adata.obs_keys():
@@ -86,14 +87,14 @@ def sex_classifier_pbmc(adata):
     adata_test.obs['Class_Prediction'] = np.where((adata_test.obs['Predictions'] == 0.0), 
                                                   adata.obs.Predictions_Probability_Female, 
                                                   adata.obs.Predictions_Probability_Male)
-    print('Adding Columns to the Adata')
+    print('Adding Columns to the Anndata')
     
     #If loop for adding the class prediction of the provided sex data 
     if ('Sex' or 'sex') in adata.obs_keys():
-        conditions = [((adata_test.obs.Sex_Class == adata_test.obs.Predictions) & (adata_test.obs.Class_Prediction > 0.85)),
-          ((adata_test.obs.Sex_Class != adata_test.obs.Predictions) & (adata_test.obs.Class_Prediction > 0.85)), 
-          ((adata_test.obs.Sex_Class == adata_test.obs.Predictions) & (adata_test.obs.Class_Prediction < 0.85)),
-          ((adata_test.obs.Sex_Class != adata_test.obs.Predictions) & (adata_test.obs.Class_Prediction < 0.85))]
+        conditions = [((adata_test.obs.Sex_Class == adata_test.obs.Predictions) & (adata_test.obs.Class_Prediction > cutoff)),
+          ((adata_test.obs.Sex_Class != adata_test.obs.Predictions) & (adata_test.obs.Class_Prediction > cutoff)), 
+          ((adata_test.obs.Sex_Class == adata_test.obs.Predictions) & (adata_test.obs.Class_Prediction < cutoff)),
+          ((adata_test.obs.Sex_Class != adata_test.obs.Predictions) & (adata_test.obs.Class_Prediction < cutoff))]
         choices = [ "True Positive", 'False Positive', 'False Negative' , 'True Negative']
         adata.obs['Condition'] = np.select(conditions, choices, default=np.nan)
         #Accuracy Score
@@ -120,33 +121,38 @@ def sex_classifier_pbmc(adata):
     print("--- %s secs ---" % int((time.time() - start_time)))
 
 def misclassified(adata, min_ncounts=1100, min_genes=300, min_mtfrac=0.04):
+    """Returns dataframe for misclassified cells"""
     print('Initializing')
     start_time = time.time()    
     sc.settings.verbosity = 0
     adata_test = adata.copy()
+    adata_test.obs.columns = adata_test.obs.columns.str.capitalize()
     if ('log1p') in adata.uns.keys():
-        #Check which cell type is misclassified
-        azimuth_markers = pd.read_csv((os.path.join(package_dir, 'azimuth_markers_MACA.csv')), index_col=['Unnamed: 0'])
-        cells_of_interest_az = azimuth_markers['Expanded Label'].values.tolist()
-        #Create the lists and dicts
-        cell_markers_az = {}
-        marker_list_az = []
-        for i,j in zip(range(0,93),cells_of_interest_az):
-            x = azimuth_markers.iloc[i,:].values.tolist()
-            cell_markers_az[j] = x[1:]
-            marker_list_az += x[1:]
-        marker_list_az = list(set(marker_list_az))
+        if 'Annotation' not in adata_test.obs.keys():
+            #Annotate the cells
+            azimuth_markers = pd.read_csv((os.path.join(package_dir, 'azimuth_markers_MACA.csv')), index_col=['Unnamed: 0'])
+            cells_of_interest_az = azimuth_markers['Expanded Label'].values.tolist()
+            #Create the lists and dicts
+            cell_markers_az = {}
+            marker_list_az = []
+            for i,j in zip(range(0,93),cells_of_interest_az):
+                x = azimuth_markers.iloc[i,:].values.tolist()
+                cell_markers_az[j] = x[1:]
+                marker_list_az += x[1:]
+            marker_list_az = list(set(marker_list_az))
 
-        #Slice adata_test for i in marker_list_az if i in adata_test.var.index]
-        b = [i for i in marker_list_az if i in adata_test.var.index]
-        ad_az = adata_test.copy()
-        ad_az = ad_az[:,b]
-        ad_az, annotation_az = maca.singleMACA(ad=ad_az, cell_markers=cell_markers_az,res=[1, 1.5, 2.0],n_neis=[3,5,10])
-        print('Annotation Complete')
-
-        #Add annotation to the original adata
-        adata.obs['Annotation']=np.array(annotation_az)
-        adata_test.obs['Annotation']=np.array(annotation_az)
+            #Slice adata_test for i in marker_list_az if i in adata_test.var.index]
+            b = [i for i in marker_list_az if i in adata_test.var.index]
+            ad_az = adata_test.copy()
+            ad_az = ad_az[:,b]
+            ad_az, annotation_az = maca.singleMACA(ad=ad_az, cell_markers=cell_markers_az,res=[1, 1.5, 2.0],n_neis=[3,5,10])
+            #Add annotation to the original adata
+            adata.obs['Annotation']=np.array(annotation_az)
+            adata_test.obs['Annotation']=np.array(annotation_az)
+            print('Annotation Complete')
+        else:
+            pass
+        #Add parameters to test Adata
         adata_test.obs['n_counts'] = adata_test.X.sum(axis = 1)
         adata_test.obs['n_genes'] = (adata_test.X > 0).sum(axis = 1)
         mt_gene = np.flatnonzero([gene.startswith('MT-') for gene in adata_test.var_names])
@@ -236,13 +242,13 @@ def misclassified(adata, min_ncounts=1100, min_genes=300, min_mtfrac=0.04):
         mis_pred_df = mis_pred_df.rename(columns={'index':'Annotation'})
         mis_pred_df.loc['Total',:]= mis_pred_df.sum(axis=0)   
         mis_pred_df_temp = mis_pred_df.iloc[:-1,:]
-
+        mis_pred_df.iloc[-1,0] = 'Total'
         chosen_cell_type = mis_pred_df_temp.iloc[(np.argmax(mis_pred_df_temp['Perc_Unexplained_Total_Pop'])), :].Annotation
         print('Low quality cells detected and dataframe created')
         print("--- %s mins ---" % int((time.time() - start_time)/60))
         return mis_pred_df   
     else:
-        print('Please provide Normalized and Log transformed Adata')
+        print('Please provide Normalized and Log transformed Anndata')
         return None
     
 
@@ -297,17 +303,16 @@ def plot_avg_gene_expression(adata):
         print('Dataframes created')
         print('Plotting')
         #Plots
-        fig, ((ax1,ax2),(ax3,ax4)) = plt.subplots(nrows=2, ncols=2)
-        rcParams['figure.figsize']=(20,15)
+        fig, ((ax1,ax2),(ax3,ax4)) = plt.subplots(nrows=2, ncols=2, figsize=(20,10))
         fig.subplots_adjust(hspace=0.5, wspace=0.001)
         sb.heatmap(df_females_correct, ax=ax1, cmap='GnBu', alpha=0.6, cbar=False).set(title="Correct Females" )
-        fig.colorbar(ax1.collections[0], ax=ax1,location="left", use_gridspec=False, pad=0.4, shrink=0.5)
+        fig.colorbar(ax1.collections[0], ax=ax1,location="left", use_gridspec=False, pad=0.5, shrink=0.5)
         sb.heatmap(df_females_incorrect, ax=ax2, cmap='OrRd', alpha=0.6,cbar=False).set(title="Incorrect Females")
-        fig.colorbar(ax2.collections[0], ax=ax2,location="right", use_gridspec=False, pad=0.4, shrink=0.5)
+        fig.colorbar(ax2.collections[0], ax=ax2,location="right", use_gridspec=False, pad=0.5, shrink=0.5)
         sb.heatmap(df_males_correct, ax=ax3, cmap='GnBu', alpha=0.6, cbar=False).set(title="Correct Males" )
-        fig.colorbar(ax3.collections[0], ax=ax3,location="left", use_gridspec=False, pad=0.4, shrink=0.5)
+        fig.colorbar(ax3.collections[0], ax=ax3,location="left", use_gridspec=False, pad=0.5, shrink=0.5)
         sb.heatmap(df_males_incorrect, ax=ax4, cmap='OrRd', alpha=0.6,cbar=False).set(title="Incorrect Males")
-        fig.colorbar(ax4.collections[0], ax=ax4,location="right", use_gridspec=False, pad=0.4, shrink=0.5)
+        fig.colorbar(ax4.collections[0], ax=ax4,location="right", use_gridspec=False, pad=0.5, shrink=0.5)
         ax2.yaxis.tick_right()
         ax4.yaxis.tick_right()
         ax2.yaxis.set_tick_params(rotation=0)
@@ -316,7 +321,7 @@ def plot_avg_gene_expression(adata):
         print("--- %s sec ---" % int((time.time() - start_time)))
         return fig
     else:
-        print('Please provide Normalized and Log transformed Adata')
+        print('Please provide Normalized and Log transformed Anndata')
         return None
     
     
