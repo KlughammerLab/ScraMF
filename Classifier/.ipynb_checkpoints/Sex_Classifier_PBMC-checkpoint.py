@@ -100,10 +100,10 @@ def sex_classifier_pbmc(adata, class_prob_cutoff=0.85):
         #Accuracy Score
         adata_test_males = adata_test[adata_test.obs.Sex == 'M']
         acc_score_males = accuracy_score(adata_test_males.obs.Sex_Class, adata_test_males.obs.Predictions)
-        print('The accuracy_score for males for universally trained model is {}'.format(acc_score_males))
+        print('The accuracy_score for males for trained model is {}'.format(acc_score_males))
         adata_test_females = adata_test[adata_test.obs.Sex == 'F']
         acc_score_females = accuracy_score(adata_test_females.obs.Sex_Class, adata_test_females.obs.Predictions)
-        print('The accuracy_score for females for universally trained model is {}'.format(acc_score_females))
+        print('The accuracy_score for females for trained model is {}'.format(acc_score_females))
     else:
         pass
     
