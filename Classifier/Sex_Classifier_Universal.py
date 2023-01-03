@@ -123,7 +123,7 @@ def train_model_classifer(adata_training, epochs=20, max_depth=10, eta=0.15, pre
     return model_softmax, model_softprob
     
     
-def sex_classifier_universal(adata_test, model_softmax, model_softprob, cutoff=0.85):
+def sex_classifier_universal(adata_test, model_softmax, model_softprob, class_prob_cutoff=0.85):
     """ Classifies cells into males and females based on the gene expression"""
     start_time = time.time()
     print('Initializing')
@@ -187,9 +187,9 @@ def sex_classifier_universal(adata_test, model_softmax, model_softprob, cutoff=0
     #If loop for adding the class prediction of the provided sex data 
     if ('Sex' or 'sex' or 'SEX') in adata_test.obs_keys():
         conditions = [((adata_test_copy.obs.Sex_Class == adata_test_copy.obs.Predictions) & (adata_test_copy.obs.Class_Prediction > cutoff)),
-          ((adata_test_copy.obs.Sex_Class != adata_test_copy.obs.Predictions) & (adata_test_copy.obs.Class_Prediction > cutoff)), 
-          ((adata_test_copy.obs.Sex_Class == adata_test_copy.obs.Predictions) & (adata_test_copy.obs.Class_Prediction < cutoff)),
-          ((adata_test_copy.obs.Sex_Class != adata_test_copy.obs.Predictions) & (adata_test_copy.obs.Class_Prediction < cutoff))]
+          ((adata_test_copy.obs.Sex_Class != adata_test_copy.obs.Predictions) & (adata_test_copy.obs.Class_Prediction > class_prob_cutoff)), 
+          ((adata_test_copy.obs.Sex_Class == adata_test_copy.obs.Predictions) & (adata_test_copy.obs.Class_Prediction < class_prob_cutoff)),
+          ((adata_test_copy.obs.Sex_Class != adata_test_copy.obs.Predictions) & (adata_test_copy.obs.Class_Prediction < class_prob_cutoff))]
         choices = [ "True Positive", 'False Positive', 'False Negative' , 'True Negative']
         adata_test.obs['Condition'] = np.select(conditions, choices, default=np.nan)
         #Accuracy Score
@@ -214,7 +214,7 @@ def sex_classifier_universal(adata_test, model_softmax, model_softprob, cutoff=0
     print("--- %s mins ---" % int((time.time() - start_time)/60))
     
     
-def misclassified(adata, min_ncounts=1100, min_genes=300, min_mtfrac=0.04, cutoff=0.85):
+def misclassified(adata, min_ncounts=1100, min_genes=300, min_mtfrac=0.04, misclass_cutoff=0.85):
     """Returns dataframe for misclassified cells"""
     print('Initializing')
     start_time = time.time()    
@@ -357,7 +357,7 @@ def misclassified(adata, min_ncounts=1100, min_genes=300, min_mtfrac=0.04, cutof
         adata_test.obs['mt_frac']= np.sum(adata_test[:, mt_gene].X, axis =1).A1/adata_test.obs['n_counts']
         adata_test = adata_test[adata_test.obs['mt_frac'] < 0.2]
         adata_test.obs.Predictions = adata_test.obs.Predictions.astype(str)
-        adata_wrong_predictions = adata_test[adata_test.obs.Class_Pred < cutoff]
+        adata_wrong_predictions = adata_test[adata_test.obs.Class_Pred < misclass_cutoff]
         
         # Doublet count
         # filtering/preprocessing parameters:
@@ -391,7 +391,7 @@ def misclassified(adata, min_ncounts=1100, min_genes=300, min_mtfrac=0.04, cutof
             total = len(adata_test.obs[adata_test.obs.Annotation == cell])
             adata_cell = adata_test.obs[adata_test.obs.Annotation == cell]
             total_cells.append(len(adata_cell))
-            mispred = len(adata_cell[adata_cell.Class_Pred < cutoff])
+            mispred = len(adata_cell[adata_cell.Class_Pred < misclass_cutoff])
             perc = (mispred/total)*100
             mis_pred_cells[cell] = perc
         mis_pred_df = pd.DataFrame.from_dict(mis_pred_cells, orient='index')
@@ -408,7 +408,7 @@ def misclassified(adata, min_ncounts=1100, min_genes=300, min_mtfrac=0.04, cutof
         for i in cells_annot:
             total = len(adata_test.obs[adata_test.obs.Annotation == i])
             abc = adata_test.obs[adata_test.obs.Annotation == i]
-            mispred = len(abc[abc.Class_Pred < cutoff])
+            mispred = len(abc[abc.Class_Pred < misclass_cutoff])
             num_mis.append(mispred)
         mis_pred_df['Number_Cells_Misclass'] = num_mis
         #Some cells could have low gene count + count + doublet and therefore need to be filtered as low quality before individually assigning to columns

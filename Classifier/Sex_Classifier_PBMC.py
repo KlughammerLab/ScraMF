@@ -120,7 +120,7 @@ def sex_classifier_pbmc(adata, class_prob_cutoff=0.85):
     
     print("--- %s secs ---" % int((time.time() - start_time)))
 
-def misclassified(adata, min_ncounts=1100, min_genes=300, min_mtfrac=0.04, cutoff=0.85):
+def misclassified(adata, min_ncounts=1100, min_genes=300, min_mtfrac=0.04, misclass_cutoff=0.85):
     """Returns dataframe for misclassified cells"""
     print('Initializing')
     start_time = time.time()    
@@ -263,7 +263,7 @@ def misclassified(adata, min_ncounts=1100, min_genes=300, min_mtfrac=0.04, cutof
         adata_test.obs['mt_frac']= np.sum(adata_test[:, mt_gene].X, axis =1).A1/adata_test.obs['n_counts']
         adata_test = adata_test[adata_test.obs['mt_frac'] < 0.2]
         adata_test.obs.Predictions = adata_test.obs.Predictions.astype(str)
-        adata_wrong_predictions = adata_test[adata_test.obs.Class_Pred < cutoff]
+        adata_wrong_predictions = adata_test[adata_test.obs.Class_Pred < misclass_cutoff]
         
         # Doublet count
         # filtering/preprocessing parameters:
@@ -297,7 +297,7 @@ def misclassified(adata, min_ncounts=1100, min_genes=300, min_mtfrac=0.04, cutof
             total = len(adata_test.obs[adata_test.obs.Annotation == cell])
             adata_cell = adata_test.obs[adata_test.obs.Annotation == cell]
             total_cells.append(len(adata_cell))
-            mispred = len(adata_cell[adata_cell.Class_Pred < cutoff])
+            mispred = len(adata_cell[adata_cell.Class_Pred < misclass_cutoff])
             perc = (mispred/total)*100
             mis_pred_cells[cell] = perc
         mis_pred_df = pd.DataFrame.from_dict(mis_pred_cells, orient='index')
@@ -314,7 +314,7 @@ def misclassified(adata, min_ncounts=1100, min_genes=300, min_mtfrac=0.04, cutof
         for i in cells_annot:
             total = len(adata_test.obs[adata_test.obs.Annotation == i])
             abc = adata_test.obs[adata_test.obs.Annotation == i]
-            mispred = len(abc[abc.Class_Pred < cutoff])
+            mispred = len(abc[abc.Class_Pred < misclass_cutoff])
             num_mis.append(mispred)
         mis_pred_df['Number_Cells_Misclass'] = num_mis
         #Some cells could have low gene count + count + doublet and therefore need to be filtered as low quality before individually assigning to columns
