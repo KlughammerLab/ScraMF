@@ -1,5 +1,5 @@
 # ScraMF
-
+### Single Cell RNA sequencing annotation for males and females
 ScraMF is a tool that uses single cell RNA sequencing (scRNA-Seq) data to classify cells into males and females. 
 
 scRNA-Seq experiments offer a powerful way to study gene expression at the level of individual cells, but they can be resource-intensive in terms of time, effort, and cost. Even though sequencing experiments have significantly out-paced 'Moore's law', the overall cost of scRNA-Seq experiments is still quite high. Multiplexing is a technique that combines multiple samples into one for more efficient processing, which can reduce the overall cost and effort of the experiment. 
@@ -20,9 +20,9 @@ ScraMF consits of two packages:
 #### The first package works on the Anndata for PBMCs which has gone through the regular filtering steps. It has the following functions:
 - sex_classifier_pbmc classifies cells into males and females based on the count matrix and adds the prediction column to the test Anndata along with the probabilities of class prediction.
 ```ruby
-import Sex_Classifier_PBMC as scp
+import ScraMF_PBMC as scp
 
-scp.sex_classifier_pbmc(test_adata, class_prob_cutoff=0.85)
+scp.scramf_pbmc(test_adata, class_prob_cutoff=0.85)
 ```
 - misclassified function returns a dataframe which tries to gives information about the number of correctly and incorrectly classified cells according to the cell type annotation and the plausible reason for their misclassification.
 ```ruby
@@ -30,7 +30,7 @@ df_misclassified = scp.misclassified(adata, min_ncounts=1100, min_genes=300, min
 ```
 - ambiguously_classified function also returns a dataframe but works on test Anndata without sex labels. It classifies cells as 'correct' and 'incorrect'  based on the class probability value specified by the user.
 ```ruby
-df_ambiguously_classified = scu.ambiguously_classified(test_adata, class_prob_cutoff=0.85)
+df_ambiguously_classified = scp.ambiguously_classified(test_adata, class_prob_cutoff=0.85)
 ```
 - plot_avg_gene_expression plots the average gene expression of highly expressed genes separately for males and females across correctly classified and incorrectly classified cells.
 ```ruby
@@ -40,13 +40,13 @@ plots = scp.plot_avg_gene_expression(test_adata)
 #### The second package requires a test Anndata with Sex Labels for training the models. It has the following functions:
 - train_model_classifier trains the two models on the training anndata for classifying cells into males and females.
 ```ruby
-import Sex_Classifier_Universal as scu
+import ScraMF_Universal as scu
 
 model_1, model_2 = scu.train_model_classifer(adata_training, epochs=20, max_depth=10, eta=0.15, predict=True)
 ```
 - sex_classifier_universtal classifies the cells into males and females by utilizing the models trained by the previous function and adds the prediction column to the test Anndata along with the probabilities of class prediction.
 ```ruby
-scu.sex_classifier_universal(test_adata, model_softmax, model_softprob, class_prob_cutoff=0.85)
+scu.sramf_universal(test_adata, model_softmax, model_softprob, class_prob_cutoff=0.85)
 ```
 - misclassified function returns a dataframe which tries to gives information about the number of correctly and incorrectly classified cells according to the cell type annotation and the plausible reason for their misclassification.
 ```ruby
@@ -60,6 +60,9 @@ df_ambiguously_classified = scu.ambiguously_classified(test_adata, class_prob_cu
 ```ruby
 plots = scu.plot_avg_gene_expression(test_adata) 
 ``` 
+
+
+
 
 
 

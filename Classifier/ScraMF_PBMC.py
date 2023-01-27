@@ -109,14 +109,16 @@ def scramf_pbmc(adata, class_prob_cutoff=0.85):
     
     print('Prediction Completed')
     
-    #Add ROC Curve and ROC-AUC Value
-    auroc = roc_auc_score(adata_test.obs.Sex_Class, adata_test.obs.Predictions)
-    fpr, tpr, thresholds = roc_curve(adata_test.obs.Sex_Class, adata_test.obs.Predictions)
-    #Plot the ROC Curve
-    plt.figure(figsize=(5,5))
-    plt.plot(fpr, tpr, linestyle = '-', label = 'ROC_AUC_Curve %0.3f' % auroc)
-    plt.legend(loc='lower right')
-    plt.show()
+    if len(adata_test.obs.Sex_Class.unique()) > 1:
+        auroc = roc_auc_score(adata_test.obs.Sex_Class, adata_test.obs.Predictions)
+        fpr, tpr, thresholds = roc_curve(adata_test.obs.Sex_Class, adata_test.obs.Predictions)
+        #Plot the ROC Curve
+        plt.figure(figsize=(5,5))
+        plt.plot(fpr, tpr, linestyle = '-', label = 'ROC_AUC_Curve %0.3f' % auroc)
+        plt.legend(loc='lower right')
+        plt.show()
+    else:
+        pass
     
     print("--- %s secs ---" % int((time.time() - start_time)))
 
@@ -257,7 +259,7 @@ def misclassified(adata, min_ncounts=1100, min_genes=300, min_mtfrac=0.04):
         print('Please provide Anndata with Sex Label or use ambiguously_assigned function from the package')
         
 def ambiguously_classified(adata,min_ncounts=1100, min_genes=300, min_mtfrac=0.04, class_prob_cutoff=0.85):
-    """Returns dataframe for misclassified cells"""
+    """Returns dataframe for ambiguously classified cells"""
     print('Initializing')
     start_time = time.time()    
     sc.settings.verbosity = 0
