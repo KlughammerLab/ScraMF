@@ -18,7 +18,7 @@ ScraMF consits of two packages:
 2. The second package enables the user to train models using the training Anndata, and then use those models to classify cells.
 
 #### The first package works on the Anndata for PBMCs which has gone through the regular filtering steps. It has the following functions:
-- sex_classifier_pbmc classifies cells into males and females based on the count matrix and adds the prediction column to the test Anndata along with the probabilities of class prediction.
+- scramf_pbmc classifies cells into males and females based on the count matrix and adds the prediction column to the test Anndata along with the probabilities of class prediction.
 ```ruby
 import ScraMF_PBMC as scp
 
@@ -44,7 +44,7 @@ import ScraMF_Universal as scu
 
 model_1, model_2 = scu.train_model_classifer(adata_training, epochs=20, max_depth=10, eta=0.15, predict=True)
 ```
-- sex_classifier_universtal classifies the cells into males and females by utilizing the models trained by the previous function and adds the prediction column to the test Anndata along with the probabilities of class prediction.
+- scramf_universtal classifies the cells into males and females by utilizing the models trained by the previous function and adds the prediction column to the test Anndata along with the probabilities of class prediction.
 ```ruby
 scu.sramf_universal(test_adata, model_softmax, model_softprob, class_prob_cutoff=0.85)
 ```
